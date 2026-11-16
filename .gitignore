@@ -18,6 +18,7 @@ coverage
 functions/lib
 functions/node_modules
 *.tsbuildinfo
+.vercel
 
 # Credenciales locales (service account de Firebase Admin). Nunca versionar.
 financen-family.json
