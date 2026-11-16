@@ -19,8 +19,21 @@ service cloud.firestore {
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
+
+    // Allowlist de cuentas habilitadas para usar la app.
+    // Mantener sincronizada con src/domain/access.ts.
+    // Es la unica barrera real: la UI puede saltearse, las reglas no.
+    function isAllowedEmail() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() in [
+          'isaux13@gmail.com',
+          'danyrojassimon@gmail.com'
+        ];
+    }
+
     function signedIn() {
-      return request.auth != null;
+      return isAllowedEmail();
     }
 
     function uid() {

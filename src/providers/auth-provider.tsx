@@ -14,7 +14,11 @@ import {
 } from '@/lib/firebase'
 import { logError } from '@/lib/errors'
 import { ensureUserProfile, subscribeUserProfile } from '@/data/users'
+import { isAllowedEmail } from '@/domain/access'
 import type { UserProfile } from '@/domain/models'
+
+export const ACCESS_DENIED_MESSAGE =
+  'Esta cuenta no tiene acceso. Ingresá con una cuenta autorizada.'
 
 interface AuthContextValue {
   user: User | null
@@ -62,19 +66,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
 
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
-      setUser(nextUser)
       if (profileUnsub.current) {
         profileUnsub.current()
         profileUnsub.current = null
       }
 
       if (!nextUser) {
+        setUser(null)
         setProfile(null)
         setProfileLoading(false)
         setInitializing(false)
         return
       }
 
+      // Allowlist: solo las cuentas autorizadas pueden usar la app.
+      // Las reglas de Firestore aplican la misma lista como ultima barrera.
+      if (!isAllowedEmail(nextUser.email)) {
+        setUser(null)
+        setProfile(null)
+        setProfileLoading(false)
+        setInitializing(false)
+        setError(ACCESS_DENIED_MESSAGE)
+        void firebaseSignOut(auth).catch((signOutError: unknown) => {
+          logError('signOutUnauthorized', signOutError)
+        })
+        return
+      }
+
+      setUser(nextUser)
       setProfileLoading(true)
       void (async () => {
         try {
