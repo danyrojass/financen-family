@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+# La aplicación no expone rutas públicas más allá de la portada y el login.

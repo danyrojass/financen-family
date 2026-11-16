@@ -1,0 +1,586 @@
+rules_version = '2';
+
+// =============================================================================
+// Finanzas del Hogar - Reglas de seguridad de Cloud Firestore
+//
+// Principios:
+//  - Toda lectura/escritura de datos de un hogar requiere ser miembro del hogar
+//    (documento households/{hid}/members/{uid} existente).
+//  - El owner administra el hogar, sus miembros y las invitaciones.
+//  - Un usuario solo puede leer/escribir su propio documento users/{uid}.
+//  - Los importes son enteros (unidades minimas) y los shapes estan acotados
+//    para evitar documentos arbitrarios.
+//  - El cliente nunca puede auto-asignarse rol OWNER de un hogar ajeno.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isVerified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && uid() == userId;
+    }
+
+    function isId(value) {
+      return value is string && value.size() > 0 && value.size() <= 128;
+    }
+
+    function isShortString(value, max) {
+      return value is string && value.size() > 0 && value.size() <= max;
+    }
+
+    function isOptionalString(value, max) {
+      return value == null || (value is string && value.size() <= max);
+    }
+
+    function isAmount(value) {
+      return value is int && value <= 900000000000000 && value >= -900000000000000;
+    }
+
+    function isPositiveAmount(value) {
+      return value is int && value > 0 && value <= 900000000000000;
+    }
+
+    function isCurrency(value) {
+      return value in ['PYG', 'USD'];
+    }
+
+    function isRate(value) {
+      return (value is int || value is float) && value > 0;
+    }
+
+    function isDay(value) {
+      return value is int && value >= 1 && value <= 31;
+    }
+
+    function isPeriod(value) {
+      return value is string && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
+    }
+
+    function memberPath(hid, userId) {
+      return /databases/$(database)/documents/households/$(hid)/members/$(userId);
+    }
+
+    function invitationPath(hid, invitationId) {
+      return /databases/$(database)/documents/households/$(hid)/invitations/$(invitationId);
+    }
+
+    function isMember(hid) {
+      return signedIn() && exists(memberPath(hid, uid()));
+    }
+
+    function memberRole(hid) {
+      return get(memberPath(hid, uid())).data.role;
+    }
+
+    function isOwner(hid) {
+      return isMember(hid) && memberRole(hid) == 'OWNER';
+    }
+
+    function householdOwnerId(hid) {
+      return get(/databases/$(database)/documents/households/$(hid)).data.ownerId;
+    }
+
+    // Invitacion valida usada al crear el documento de miembro.
+    // El email vacio convierte la invitacion en un codigo portador (bearer token)
+    // de alta entropia; si tiene email, debe coincidir con la cuenta autenticada.
+    function invitationIsUsable(hid, invitationId) {
+      let inv = get(invitationPath(hid, invitationId)).data;
+      return inv.status == 'pending'
+        && inv.expiresAt > request.time
+        && inv.role == 'MEMBER'
+        && (
+          inv.email == ''
+          || inv.email == request.auth.token.email.lower()
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{userId}
+    // ---------------------------------------------------------------------
+    match /users/{userId} {
+      function validProfile() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'uid', 'displayName', 'email', 'photoURL', 'householdIds',
+            'activeHouseholdId', 'createdAt', 'updatedAt', 'lastSeenAt',
+            'defaultCurrency', 'onboardingCompleted'
+          ])
+          && d.uid == userId
+          && d.email == request.auth.token.email
+          && isShortString(d.displayName, 120)
+          && isOptionalString(d.photoURL, 1000)
+          && d.householdIds is list
+          && d.householdIds.size() <= 20
+          && (d.activeHouseholdId == null || isId(d.activeHouseholdId));
+      }
+
+      allow read: if isSelf(userId);
+      allow create: if isSelf(userId) && validProfile() && request.resource.data.uid == uid();
+      allow update: if isSelf(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'email', 'photoURL', 'householdIds', 'activeHouseholdId',
+          'updatedAt', 'lastSeenAt', 'defaultCurrency', 'onboardingCompleted'
+        ]);
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // households/{hid}
+    // ---------------------------------------------------------------------
+    match /households/{hid} {
+      function validHousehold() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'name', 'baseCurrency', 'fxRates', 'ownerId', 'createdAt',
+            'updatedAt', 'createdBy', 'timezone', 'locale'
+          ])
+          && isShortString(d.name, 80)
+          && isCurrency(d.baseCurrency)
+          && d.ownerId == uid()
+          && d.createdBy == uid()
+          && d.createdAt is timestamp
+          && d.updatedAt is timestamp
+          && d.fxRates is map
+          && d.fxRates.size() <= 6;
+      }
+
+      allow read: if isMember(hid);
+      allow create: if isVerified() && validHousehold();
+      allow update: if isOwner(hid)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'baseCurrency', 'fxRates', 'timezone', 'locale', 'updatedAt'
+        ])
+        && isShortString(request.resource.data.name, 80)
+        && isCurrency(request.resource.data.baseCurrency);
+      // Solo el owner puede borrar el hogar (la UI lo habilita si es el unico miembro).
+      allow delete: if isOwner(hid);
+
+      // -------------------------------------------------------------------
+      // members/{userId}
+      // -------------------------------------------------------------------
+      match /members/{memberId} {
+        function validMember() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'uid', 'role', 'displayName', 'email', 'photoURL',
+              'joinedAt', 'invitationId'
+            ])
+            && d.uid == memberId
+            && isShortString(d.displayName, 120)
+            && (d.email == '' || d.email == request.auth.token.email.lower())
+            && d.joinedAt is timestamp
+            && (d.role == 'MEMBER' || d.role == 'OWNER');
+        }
+
+        allow read: if isMember(hid);
+        // Alta como OWNER: solo el creador del hogar, sin miembros previos.
+        // Alta como MEMBER: solo el propio usuario con una invitacion valida.
+        allow create: if isSelf(memberId)
+          && validMember()
+          && (
+            (request.resource.data.role == 'OWNER'
+              && householdOwnerId(hid) == uid()
+              && !exists(memberPath(hid, uid())))
+            ||
+            (request.resource.data.role == 'MEMBER'
+              && isId(request.resource.data.invitationId)
+              && invitationIsUsable(hid, request.resource.data.invitationId))
+          );
+        // El owner puede cambiar el rol de otros (transferencia de propiedad).
+        allow update: if isOwner(hid)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && request.resource.data.role in ['OWNER', 'MEMBER'];
+        // Un MEMBER puede salir del hogar; el owner puede expulsar MEMBERs.
+        allow delete: if (isSelf(memberId) && resource.data.role == 'MEMBER')
+          || (isOwner(hid) && resource.data.role == 'MEMBER');
+      }
+
+      // -------------------------------------------------------------------
+      // invitations/{invitationId}  (el id es el codigo de invitacion)
+      // -------------------------------------------------------------------
+      match /invitations/{invitationId} {
+        function validInvitation() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'email', 'role', 'status', 'createdBy', 'createdAt',
+              'expiresAt', 'householdName', 'acceptedBy', 'acceptedAt', 'revokedAt'
+            ])
+            && isId(invitationId)
+            && d.role == 'MEMBER'
+            && d.status in ['pending', 'accepted', 'revoked', 'expired']
+            && d.createdBy == uid()
+            && d.createdAt is timestamp
+            && d.expiresAt is timestamp
+            && d.expiresAt <= d.createdAt + duration.value(30, 'd')
+            && d.expiresAt > d.createdAt
+            && (d.email == '' || (d.email is string && d.email.size() <= 200))
+            && isShortString(d.householdName, 80);
+        }
+
+        // El invitado conoce el codigo (id) y necesita leer la invitacion.
+        allow get: if signedIn()
+          && resource.data.status == 'pending'
+          && resource.data.expiresAt > request.time;
+        // Listar invitaciones: solo el owner.
+        allow list: if isOwner(hid);
+        allow create: if isOwner(hid) && validInvitation();
+        // El invitado acepta; el owner revoca.
+        allow update: if (
+            signedIn()
+            && resource.data.status == 'pending'
+            && resource.data.expiresAt > request.time
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.acceptedBy == uid()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'acceptedBy', 'acceptedAt'
+            ])
+          ) || (
+            isOwner(hid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'revokedAt'
+            ])
+            && request.resource.data.status == 'revoked'
+          );
+        allow delete: if isOwner(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // accounts/{accountId}
+      // -------------------------------------------------------------------
+      match /accounts/{accountId} {
+        function validAccount() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'name', 'type', 'currency', 'initialBalanceMinor', 'includeInAvailable',
+              'ownerId', 'isActive', 'notes', 'sortOrder', 'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(accountId)
+            && isShortString(d.name, 120)
+            && d.type in ['cash', 'bank', 'wallet', 'savings', 'investment', 'other']
+            && isCurrency(d.currency)
+            && isAmount(d.initialBalanceMinor)
+            && d.includeInAvailable is bool
+            && (d.ownerId == null || isId(d.ownerId))
+            && d.isActive is bool
+            && isOptionalString(d.notes, 500)
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validAccount()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'type', 'currency', 'initialBalanceMinor', 'includeInAvailable',
+              'ownerId', 'isActive', 'notes', 'sortOrder', 'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // cards/{cardId}
+      // -------------------------------------------------------------------
+      match /cards/{cardId} {
+        function validCard() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'name', 'issuer', 'holderId', 'limitMinor', 'currency', 'closingDay',
+              'dueDay', 'isActive', 'notes', 'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(cardId)
+            && isShortString(d.name, 120)
+            && isShortString(d.issuer, 120)
+            && (d.holderId == null || isId(d.holderId))
+            && isPositiveAmount(d.limitMinor)
+            && isCurrency(d.currency)
+            && isDay(d.closingDay)
+            && isDay(d.dueDay)
+            && d.isActive is bool
+            && isOptionalString(d.notes, 500)
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validCard()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'issuer', 'holderId', 'limitMinor', 'currency', 'closingDay',
+              'dueDay', 'isActive', 'notes', 'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // categories/{categoryId}
+      // -------------------------------------------------------------------
+      match /categories/{categoryId} {
+        function validCategory() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'name', 'kind', 'parentId', 'color', 'icon', 'isArchived',
+              'isSystem', 'sortOrder', 'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(categoryId)
+            && isShortString(d.name, 80)
+            && d.kind in ['expense', 'income']
+            && (d.parentId == null || isId(d.parentId))
+            && isOptionalString(d.color, 32)
+            && isOptionalString(d.icon, 40)
+            && d.isArchived is bool
+            && d.isSystem is bool
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validCategory()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'kind', 'parentId', 'color', 'icon', 'isArchived',
+              'isSystem', 'sortOrder', 'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // budgets/{budgetId}
+      // -------------------------------------------------------------------
+      match /budgets/{budgetId} {
+        function validBudget() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'period', 'categoryId', 'amountMinor', 'currency', 'notes',
+              'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(budgetId)
+            && isPeriod(d.period)
+            && isId(d.categoryId)
+            && isPositiveAmount(d.amountMinor)
+            && isCurrency(d.currency)
+            && isOptionalString(d.notes, 300)
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validBudget()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'period', 'categoryId', 'amountMinor', 'currency', 'notes',
+              'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // loans/{loanId}  (prestamos y compromisos)
+      // -------------------------------------------------------------------
+      match /loans/{loanId} {
+        function validLoan() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'kind', 'name', 'institution', 'originalPrincipalMinor', 'interestRate',
+              'installmentAmountMinor', 'installmentsTotal', 'firstDueDate',
+              'currency', 'accountId', 'categoryId', 'isActive', 'notes',
+              'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(loanId)
+            && d.kind in ['loan', 'commitment']
+            && isShortString(d.name, 120)
+            && isOptionalString(d.institution, 120)
+            && isPositiveAmount(d.originalPrincipalMinor)
+            && (d.interestRate is int || d.interestRate is float)
+            && d.interestRate >= 0 && d.interestRate <= 100
+            && isPositiveAmount(d.installmentAmountMinor)
+            && d.installmentsTotal is int && d.installmentsTotal >= 1 && d.installmentsTotal <= 600
+            && d.firstDueDate is timestamp
+            && isCurrency(d.currency)
+            && (d.accountId == null || isId(d.accountId))
+            && (d.categoryId == null || isId(d.categoryId))
+            && d.isActive is bool
+            && isOptionalString(d.notes, 500)
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validLoan()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'kind', 'name', 'institution', 'originalPrincipalMinor', 'interestRate',
+              'installmentAmountMinor', 'installmentsTotal', 'firstDueDate',
+              'currency', 'accountId', 'categoryId', 'isActive', 'notes',
+              'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // recurring/{recurringId}  (plantillas de movimientos recurrentes)
+      // -------------------------------------------------------------------
+      match /recurring/{recurringId} {
+        function validRecurring() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'name', 'type', 'amountMinor', 'currency', 'frequency', 'intervalDays',
+              'dayOfMonth', 'nextRunAt', 'accountId', 'cardId', 'toAccountId',
+              'categoryId', 'loanId', 'autoGenerate', 'isActive', 'notes',
+              'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(recurringId)
+            && isShortString(d.name, 120)
+            && d.type in ['expense', 'income', 'transfer', 'savings_contribution',
+                          'card_payment', 'loan_payment']
+            && isPositiveAmount(d.amountMinor)
+            && isCurrency(d.currency)
+            && d.frequency in ['weekly', 'monthly', 'yearly', 'custom']
+            && (d.frequency != 'custom'
+              || (d.intervalDays is int && d.intervalDays >= 1 && d.intervalDays <= 365))
+            && (d.dayOfMonth == null || isDay(d.dayOfMonth))
+            && d.nextRunAt is timestamp
+            && (d.accountId == null || isId(d.accountId))
+            && (d.cardId == null || isId(d.cardId))
+            && (d.toAccountId == null || isId(d.toAccountId))
+            && (d.categoryId == null || isId(d.categoryId))
+            && (d.loanId == null || isId(d.loanId))
+            && d.autoGenerate is bool
+            && d.isActive is bool
+            && isOptionalString(d.notes, 300)
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create, update: if isMember(hid) && validRecurring()
+          && (request.method == 'create'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'type', 'amountMinor', 'currency', 'frequency', 'intervalDays',
+              'dayOfMonth', 'nextRunAt', 'accountId', 'cardId', 'toAccountId',
+              'categoryId', 'loanId', 'autoGenerate', 'isActive', 'notes',
+              'updatedAt', 'updatedBy'
+            ]));
+        allow delete: if isMember(hid);
+      }
+
+      // -------------------------------------------------------------------
+      // transactions/{transactionId}
+      // -------------------------------------------------------------------
+      match /transactions/{transactionId} {
+        function transactionKeys() {
+          return [
+            'householdId', 'type', 'date', 'description', 'amountMinor', 'currency',
+            'baseAmountMinor', 'fxRate', 'categoryId', 'accountId', 'toAccountId',
+            'toAmountMinor', 'cardId', 'loanId', 'commitmentId', 'principalMinor',
+            'interestMinor', 'feeMinor', 'installmentPlanId', 'installmentIndex',
+            'installmentCount', 'createdBy', 'createdByName', 'entryMethod', 'status',
+            'notes', 'recurringId', 'rawTranscript', 'confidence', 'deletedAt',
+            'deletedBy', 'updatedBy', 'createdAt', 'updatedAt'
+          ];
+        }
+
+        function validTransaction(hid) {
+          let d = request.resource.data;
+          return d.keys().hasOnly(transactionKeys())
+            && d.householdId == hid
+            && d.createdBy == uid()
+            && d.type in ['expense', 'income', 'transfer', 'withdrawal', 'card_payment',
+                          'loan_payment', 'savings_contribution', 'savings_withdrawal',
+                          'adjustment']
+            && d.status in ['confirmed', 'pending']
+            && d.entryMethod in ['manual', 'voice', 'import']
+            && isShortString(d.description, 240)
+            && isCurrency(d.currency)
+            && isAmount(d.amountMinor)
+            && isAmount(d.baseAmountMinor)
+            && isRate(d.fxRate)
+            && d.date is timestamp
+            && d.createdAt is timestamp
+            && d.updatedAt is timestamp
+            && isShortString(d.createdByName, 120)
+            && isOptionalString(d.notes, 1000)
+            && isOptionalString(d.rawTranscript, 2000)
+            && (d.categoryId == null || isId(d.categoryId))
+            && (d.accountId == null || isId(d.accountId))
+            && (d.toAccountId == null || isId(d.toAccountId))
+            && (d.cardId == null || isId(d.cardId))
+            && (d.loanId == null || isId(d.loanId))
+            && (d.commitmentId == null || isId(d.commitmentId))
+            && (d.recurringId == null || isId(d.recurringId))
+            && (d.installmentPlanId == null || isId(d.installmentPlanId))
+            && (d.toAmountMinor == null || isAmount(d.toAmountMinor))
+            && (d.feeMinor == null || isAmount(d.feeMinor))
+            && (d.principalMinor == null || isAmount(d.principalMinor))
+            && (d.interestMinor == null || isAmount(d.interestMinor))
+            && (d.type != 'expense' || d.accountId != null || d.cardId != null)
+            && (d.type != 'income' || d.accountId != null || d.cardId != null)
+            && (d.type != 'transfer' || (d.accountId != null && d.toAccountId != null && d.accountId != d.toAccountId))
+            && (d.type != 'withdrawal' || (d.cardId != null && d.toAccountId != null))
+            && (d.type != 'card_payment' || (d.accountId != null && d.cardId != null))
+            && (d.type != 'loan_payment' || (d.accountId != null && d.loanId != null))
+            && (d.type != 'savings_contribution' || (d.accountId != null && d.toAccountId != null))
+            && (d.type != 'savings_withdrawal' || (d.accountId != null && d.toAccountId != null))
+            && (d.type != 'adjustment' || d.accountId != null || d.cardId != null);
+        }
+
+        allow read: if isMember(hid);
+        allow create: if isMember(hid) && validTransaction(hid);
+        allow update: if isMember(hid)
+          && request.resource.data.householdId == resource.data.householdId
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.currency == resource.data.currency
+          && request.resource.data.fxRate == resource.data.fxRate
+          && request.resource.data.type == resource.data.type
+          && isShortString(request.resource.data.description, 240)
+          && isAmount(request.resource.data.amountMinor)
+          && isAmount(request.resource.data.baseAmountMinor)
+          && request.resource.data.date is timestamp
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.updatedBy == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'description', 'notes', 'categoryId', 'status', 'accountId', 'toAccountId',
+            'toAmountMinor', 'cardId', 'loanId', 'commitmentId', 'amountMinor',
+            'baseAmountMinor', 'feeMinor', 'principalMinor', 'interestMinor', 'date',
+            'installmentIndex', 'installmentCount', 'deletedAt', 'deletedBy',
+            'updatedAt', 'updatedBy'
+          ]);
+        // Borrado fisico solo para el owner (la UI usa borrado logico).
+        allow delete: if isOwner(hid);
+
+        // Trazabilidad: append-only.
+        match /audit/{auditId} {
+          function validAudit() {
+            let d = request.resource.data;
+            return d.keys().hasOnly(['action', 'by', 'byName', 'at', 'summary', 'changes'])
+              && d.action in ['created', 'updated', 'deleted', 'restored']
+              && d.by == uid()
+              && d.at is timestamp
+              && isShortString(d.byName, 120)
+              && isOptionalString(d.summary, 500);
+          }
+
+          allow read: if isMember(hid);
+          allow create: if isMember(hid) && validAudit();
+          allow update, delete: if false;
+        }
+      }
+    }
+
+    // Default deny para todo lo no declarado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

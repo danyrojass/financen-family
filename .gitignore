@@ -1,0 +1,27 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.log
+npm-debug.log*
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+coverage
+functions/lib
+functions/node_modules
+*.tsbuildinfo
+
+# Credenciales locales (service account de Firebase Admin). Nunca versionar.
+financen-family.json
+*-firebase-adminsdk-*.json
+service-account*.json
+secrets/
+.env*.json
