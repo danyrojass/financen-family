@@ -339,6 +339,7 @@ Si se cambia la región de la función, actualizar `VITE_FUNCTIONS_REGION` y el 
 ## Seguridad y multi-tenancy
 
 - Cada documento de negocio vive bajo `households/{householdId}`.
+- **Allowlist de uso:** solo las cuentas de `src/domain/access.ts` pueden usar la app. La misma lista está en `firestore.rules` (`isAllowedEmail()`), que es la barrera autoritativa. Cualquier otra cuenta de Google es deslogueada y recibe `permission-denied` en Firestore.
 - Para leer o escribir, el usuario debe tener un documento `households/{hid}/members/{uid}`.
 - El rol se lee desde ese documento; `OWNER` administra hogar, miembros e invitaciones.
 - Un usuario solo puede leer y editar su propio `users/{uid}`.

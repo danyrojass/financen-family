@@ -78,6 +78,24 @@ const firebaseConfig = {
 
 Sin el dominio correcto, el login falla con `auth/unauthorized-domain`.
 
+### Allowlist de cuentas
+
+La app solo acepta las cuentas listadas en dos lugares que deben quedar sincronizados:
+
+- `firestore.rules` → helper `isAllowedEmail()` (barrera real, del lado del servidor).
+- `src/domain/access.ts` → `ALLOWED_EMAILS` (cierra la sesión y muestra el error en la UI).
+
+Actualmente: `isaux13@gmail.com` y `danyrojassimon@gmail.com`.
+
+Para habilitar otra cuenta, agregarla en ambos archivos, correr los tests y desplegar las reglas:
+
+```bash
+npx vitest run
+npm run deploy:rules
+```
+
+Cualquier otra cuenta de Google puede autenticarse, pero las reglas le niegan toda lectura/escritura y la app la desloguea de inmediato.
+
 ---
 
 ## 4. Crear Firestore
