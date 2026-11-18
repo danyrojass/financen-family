@@ -249,6 +249,9 @@ export function TransactionFormDialog({
     form.type === 'expense' || form.type === 'income' || form.type === 'loan_payment'
   const showAccountPaid =
     form.type === 'income' ||
+    form.type === 'transfer' ||
+    form.type === 'savings_contribution' ||
+    form.type === 'savings_withdrawal' ||
     form.type === 'card_payment' ||
     form.type === 'loan_payment' ||
     (form.type === 'expense' && expenseSource === 'account') ||
@@ -590,7 +593,11 @@ export function TransactionFormDialog({
                   ? 'Cuenta de pago'
                   : form.type === 'adjustment'
                     ? 'Cuenta a ajustar'
-                    : 'Cuenta'}
+                    : form.type === 'transfer' ||
+                        form.type === 'savings_contribution' ||
+                        form.type === 'savings_withdrawal'
+                      ? 'Cuenta de origen'
+                      : 'Cuenta'}
             </Label>
             <Select
               id="tx-account"
