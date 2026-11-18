@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { Route, Routes } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 import { getMissingFirebaseKeys } from '@/lib/env'
 import { AuthProvider } from '@/providers/auth-provider'
 import { HouseholdProvider } from '@/providers/household-provider'
@@ -176,6 +177,7 @@ export default function App() {
                 />
               </Routes>
             </Suspense>
+            <Analytics />
           </QuickAddProvider>
         </HouseholdProvider>
       </AuthProvider>
