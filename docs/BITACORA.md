@@ -1,6 +1,6 @@
 # Bitácora de conciliación y acceso (financen-family)
 
-Última actualización: 2026-11-17.
+Última actualización: 2026-11-18.
 
 Este archivo es el registro persistente de lo que ya se hizo y lo que queda pendiente.
 Si una tarea figure en **Pendiente**, no darla por cerrada hasta verificarla contra Firestore.
@@ -48,6 +48,12 @@ Si una tarea figure en **Pendiente**, no darla por cerrada hasta verificarla con
 - Reglas de `reconciliationItems` agregadas, compiladas y desplegadas (`npm run deploy:rules` equivalente).
 - Refuerzo de vehículo G. 8.400.000 ya existe como `pending` del 01/12/2026. No crear otro.
 - Usuario decidió **no** cambiar tema claro/oscuro.
+
+### Decisión del 18/11/2026: pausa de monetización
+
+- El usuario informó que ya corrigió los valores de sus cuentas y que todo está justificado. No se verificó Firestore en esta sesión: los ítems de conciliación listados abajo siguen registrados como `open` hasta su confirmación con evidencia.
+- Se pausa cualquier trabajo de monetización. El usuario quiere primero invitar a su esposa al hogar y probar la app en familia.
+- Reanudar monetización recién después de esa prueba interna (sin fecha definida).
 
 ### Invitación (`permission-denied`)
 
@@ -105,6 +111,8 @@ Con el ancla al cierre del 16/11, esos dos movimientos impactan: Itaú quedaría
 - `financen-family.json` contiene la clave privada de la service account versionada en el repo: riesgo reportado, pendiente de decidir su tratamiento.
 
 ## Próximo paso sugerido
+
+**En pausa por decisión del usuario (18/11/2026).** No retomar hasta que la familia haya probado la app; recién ahí reanudar monetización.
 
 1. Escribir el script nuevo sobre `scripts/reconcile-balances.cjs`, con IDs deterministas, auditoría, `source` apuntando al extracto/captura y `--dry-run`/`--apply`.
 2. Comparar cada movimiento de la evidencia contra los 29 existentes por ID/fecha/importe/cuenta/descripción; crear solo lo faltante y actualizar ítems de conciliación sin sobrescribir resoluciones.
