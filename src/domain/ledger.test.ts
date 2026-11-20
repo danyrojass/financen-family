@@ -4,8 +4,10 @@ import {
   computeAccountBalances,
   computeBudgetProgress,
   computeCardStates,
+  cardStatementRange,
   computeCategoryBreakdown,
   computeLoanStates,
+  computeLiquidity,
   computeMonthSummary,
   computeMonthlySeries,
   computeUpcoming,
@@ -47,6 +49,43 @@ describe('saldos de cuentas', () => {
     expect(balances[0]?.currentMinor).toBe(0)
   })
 
+  it('toma el saldo conciliado como ancla y no reaplica movimientos anteriores', () => {
+    const anchor = new Date('2026-11-16T23:59:59.999Z')
+    const bank = makeAccount({ id: 'bank', initialBalanceMinor: 742_299, balanceAsOf: anchor })
+    const other = makeAccount({ id: 'other', initialBalanceMinor: 100_000 })
+
+    const transactions = [
+      // Antes del ancla: ya incluido en el saldo conciliado.
+      makeTransaction({
+        type: 'income',
+        accountId: 'bank',
+        amountMinor: 2_983_712,
+        date: new Date('2026-11-16T12:00:00.000Z'),
+      }),
+      // Despues del ancla: si cuenta.
+      makeTransaction({
+        type: 'expense',
+        accountId: 'bank',
+        amountMinor: 100_000,
+        date: new Date('2026-11-17T12:00:00.000Z'),
+      }),
+      // Cuenta sin ancla: todos sus movimientos cuentan.
+      makeTransaction({
+        type: 'expense',
+        accountId: 'other',
+        amountMinor: 25_000,
+        date: new Date('2026-11-16T12:00:00.000Z'),
+      }),
+    ]
+
+    const balances = computeAccountBalances([bank, other], transactions, ctx)
+    const byId = new Map(balances.map((balance) => [balance.account.id, balance]))
+
+    expect(byId.get('bank')?.currentMinor).toBe(742_299 - 100_000)
+    expect(byId.get('bank')?.deltaMinor).toBe(-100_000)
+    expect(byId.get('other')?.currentMinor).toBe(75_000)
+  })
+
   it('separa dinero disponible de ahorros y aplica conversion', () => {
     const pyg = makeAccount({ id: 'pyg', initialBalanceMinor: 1_000_000 })
     const usd = makeAccount({
@@ -61,6 +100,31 @@ describe('saldos de cuentas', () => {
     expect(result.availableMinor).toBe(1_000_000)
     expect(result.savingsMinor).toBe(500_000)
     expect(result.rateMissing).toBe(false)
+  })
+
+  it('separa bancos, efectivo, billeteras, ahorros e inversiones', () => {
+    const accounts = [
+      makeAccount({ id: 'bank', type: 'bank', initialBalanceMinor: 800_000 }),
+      makeAccount({ id: 'cash', type: 'cash', initialBalanceMinor: 200_000 }),
+      makeAccount({
+        id: 'wallet-usd',
+        type: 'wallet',
+        currency: 'USD',
+        initialBalanceMinor: 10_000,
+      }),
+      makeAccount({ id: 'savings', type: 'savings', initialBalanceMinor: 500_000 }),
+      makeAccount({ id: 'investment', type: 'investment', initialBalanceMinor: 900_000 }),
+    ]
+
+    const liquidity = computeLiquidity(computeAccountBalances(accounts, [], ctx))
+
+    expect(liquidity.bankMinor).toBe(800_000)
+    expect(liquidity.cashMinor).toBe(200_000)
+    expect(liquidity.walletMinor).toBe(750_000)
+    expect(liquidity.liquidMinor).toBe(1_750_000)
+    expect(liquidity.savingsMinor).toBe(500_000)
+    expect(liquidity.investmentMinor).toBe(900_000)
+    expect(liquidity.nonLiquidMinor).toBe(1_400_000)
   })
 })
 
@@ -100,6 +164,19 @@ describe('tarjetas de credito', () => {
     expect(cards[0]?.availableMinor).toBe(900_000)
     expect(summary.expenseMinor).toBe(300_000)
     expect(summary.debtPaymentsMinor).toBe(200_000)
+  })
+
+  it('ubica el vencimiento en el mes del cierre cuando el dia de pago es posterior', () => {
+    const now = new Date('2026-11-17T12:00:00')
+
+    const cooperativa = cardStatementRange(makeCard({ closingDay: 1, dueDay: 10 }), now)
+    expect(cooperativa.end.getMonth()).toBe(11) // cierre 01/12
+    expect(cooperativa.dueDate.getMonth()).toBe(11) // vencimiento 10/12
+    expect(cooperativa.dueDate.getDate()).toBe(10)
+
+    const mastercard = cardStatementRange(makeCard({ closingDay: 27, dueDay: 15 }), now)
+    expect(mastercard.dueDate.getMonth()).toBe(11) // vencimiento 15/12
+    expect(mastercard.dueDate.getDate()).toBe(15)
   })
 
   it('un reintegro en tarjeta reduce el gasto', () => {
@@ -254,6 +331,34 @@ describe('proximos vencimientos', () => {
     const items = computeUpcoming([recurring], [], [], new Date('2026-11-10T12:00:00.000Z'))
     expect(items).toHaveLength(1)
     expect(items[0]?.label).toBe('Gimnasio')
+  })
+
+  it('marca los ingresos recurrentes para no contarlos como compromisos', () => {
+    const income = {
+      id: 'r-income',
+      name: 'Alquiler departamento',
+      type: 'income' as const,
+      amountMinor: 2_314_269,
+      currency: 'PYG' as const,
+      frequency: 'monthly' as const,
+      intervalDays: null,
+      dayOfMonth: 1,
+      nextRunAt: new Date('2026-12-01T12:00:00.000Z'),
+      accountId: 'cash',
+      cardId: null,
+      toAccountId: null,
+      categoryId: null,
+      loanId: null,
+      autoGenerate: true,
+      isActive: true,
+      notes: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      updatedBy: 'user-1',
+    }
+    const items = computeUpcoming([income], [], [], new Date('2026-11-17T12:00:00.000Z'))
+    expect(items).toHaveLength(1)
+    expect(items[0]?.isIncome).toBe(true)
   })
 
   it('calcula la proxima ocurrencia segun frecuencia', () => {

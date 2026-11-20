@@ -6,6 +6,7 @@ import { formatMoney } from '@/domain/money'
 import { availableMoneyBase, computeAccountBalances } from '@/domain/ledger'
 import { ACCOUNT_TYPE_LABELS } from '@/lib/labels'
 import { errorMessage } from '@/lib/errors'
+import { formatDate } from '@/lib/date'
 import { deleteAccount, updateAccount } from '@/data/accounts'
 import { useHousehold } from '@/providers/household-provider'
 import { useToast } from '@/components/ui/toast'
@@ -64,6 +65,7 @@ export function AccountsPage() {
         type: account.type,
         currency: account.currency,
         initialBalanceMinor: account.initialBalanceMinor,
+        balanceAsOf: account.balanceAsOf,
         includeInAvailable: account.includeInAvailable,
         ownerId: account.ownerId,
         isActive: !account.isActive,
@@ -113,17 +115,17 @@ export function AccountsPage() {
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-3">
         <StatCard
-          label="Dinero disponible"
+          label="Liquidez total"
           value={formatMoney(available.availableMinor, ctx.baseCurrency)}
           icon={<Wallet />}
-          hint="Cuentas incluidas"
+          hint="Bancos, efectivo y billeteras"
         />
         <StatCard
-          label="Ahorros"
+          label="Ahorros e inversiones"
           value={formatMoney(available.savingsMinor, ctx.baseCurrency)}
           icon={<Banknote />}
           tone="positive"
-          hint="Cuentas de ahorro"
+          hint="No disponible para gasto"
         />
         <StatCard
           label="Cuentas"
@@ -170,6 +172,11 @@ export function AccountsPage() {
                         <Badge variant={account.type === 'savings' ? 'success' : 'outline'}>
                           {ACCOUNT_TYPE_LABELS[account.type]}
                         </Badge>
+                        {account.balanceAsOf ? (
+                          <Badge variant="secondary">
+                            Conciliada al {formatDate(account.balanceAsOf, 'short')}
+                          </Badge>
+                        ) : null}
                         {!account.isActive ? <Badge variant="outline">Inactiva</Badge> : null}
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">
@@ -195,7 +202,7 @@ export function AccountsPage() {
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                     <span>
-                      Inicial:{' '}
+                      {account.balanceAsOf ? 'Saldo conciliado:' : 'Inicial:'}{' '}
                       <span className="tabular-nums">
                         {formatMoney(account.initialBalanceMinor, account.currency, {
                           compact: true,

@@ -4,7 +4,7 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   orderBy,
@@ -162,7 +162,10 @@ export async function getInvitation(
   householdId: string,
   invitationId: string,
 ): Promise<Invitation | null> {
-  const snapshot = await getDoc(
+  // Forzar lectura al servidor evita que un resultado cacheado de una sesion
+  // anterior (otra cuenta, o una invitacion que todavia no existia) devuelva
+  // un permission-denied aunque la invitacion ya sea valida.
+  const snapshot = await getDocFromServer(
     doc(getDb(), 'households', householdId, 'invitations', invitationId),
   )
   return snapshot.exists() ? mapInvitation(snapshot.id, snapshot.data()) : null

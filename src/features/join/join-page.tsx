@@ -13,7 +13,7 @@ import { FullScreenLoading } from '@/components/layout/guards'
 
 export function JoinPage() {
   const { householdId = '', invitationId = '' } = useParams()
-  const { user, profile, signIn, initializing, profileLoading } = useAuth()
+  const { user, profile, signIn, signOut, initializing, profileLoading } = useAuth()
   const navigate = useNavigate()
 
   const [invitation, setInvitation] = React.useState<Invitation | null>(null)
@@ -77,6 +77,12 @@ export function JoinPage() {
     }
   }
 
+  const handleSignOut = async () => {
+    await signOut()
+    setError(null)
+    setInvitation(null)
+  }
+
   if (initializing || (user && profileLoading)) {
     return <FullScreenLoading label="Verificando invitación…" />
   }
@@ -135,6 +141,11 @@ export function JoinPage() {
               <Alert variant="danger" title="Invitación no disponible">
                 {error}
               </Alert>
+              {user ? (
+                <Button variant="outline" className="w-full" onClick={() => void handleSignOut()}>
+                  Cerrar sesión e ingresar de nuevo
+                </Button>
+              ) : null}
               <Button variant="outline" className="w-full" onClick={() => navigate('/onboarding')}>
                 Crear mi propio hogar
               </Button>

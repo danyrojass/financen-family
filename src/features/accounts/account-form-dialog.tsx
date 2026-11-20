@@ -13,6 +13,7 @@ import { Label, FieldError, FieldHint } from '@/components/ui/label'
 import { MoneyInput } from '@/components/ui/money-input'
 import { SwitchField } from '@/components/ui/switch'
 import { ACCOUNT_TYPE_LABELS } from '@/lib/labels'
+import { endOfDay, fromDateInput, toDateInput } from '@/lib/date'
 import { errorMessage } from '@/lib/errors'
 
 const ACCOUNT_TYPES = Object.keys(ACCOUNT_TYPE_LABELS) as AccountType[]
@@ -22,6 +23,7 @@ interface FormState {
   type: AccountType
   currency: CurrencyCode
   initialBalance: string
+  balanceAsOf: string
   includeInAvailable: boolean
   ownerId: string
   isActive: boolean
@@ -36,6 +38,7 @@ function initialState(account: Account | null, baseCurrency: CurrencyCode): Form
     initialBalance: account
       ? formatMoney(account.initialBalanceMinor, account.currency, { withSymbol: false })
       : '',
+    balanceAsOf: account?.balanceAsOf ? toDateInput(account.balanceAsOf) : '',
     includeInAvailable: account?.includeInAvailable ?? true,
     ownerId: account?.ownerId ?? '',
     isActive: account?.isActive ?? true,
@@ -85,11 +88,22 @@ export function AccountFormDialog({
       return
     }
 
+    let balanceAsOf: Date | null = null
+    if (form.balanceAsOf.trim()) {
+      const parsedDate = fromDateInput(form.balanceAsOf)
+      if (!parsedDate) {
+        setError('La fecha de conciliación no es válida.')
+        return
+      }
+      balanceAsOf = endOfDay(parsedDate)
+    }
+
     const input: AccountInput = {
       name: form.name.trim(),
       type: form.type,
       currency: form.currency,
       initialBalanceMinor,
+      balanceAsOf,
       includeInAvailable: form.includeInAvailable,
       ownerId: form.ownerId || null,
       isActive: form.isActive,
@@ -185,6 +199,20 @@ export function AccountFormDialog({
             currency={form.currency}
           />
           <FieldHint>Puede ser negativo si la cuenta ya venía con deuda.</FieldHint>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="account-balance-asof">Saldo conciliado al día</Label>
+          <Input
+            id="account-balance-asof"
+            type="date"
+            value={form.balanceAsOf}
+            onChange={(event) => patch({ balanceAsOf: event.target.value })}
+          />
+          <FieldHint>
+            Si indicás una fecha, el saldo de arriba es el saldo real a ese día (fin del día) y los
+            movimientos anteriores ya están incluidos: no se vuelven a sumar.
+          </FieldHint>
         </div>
 
         <div className="space-y-1.5">

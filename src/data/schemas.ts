@@ -15,6 +15,20 @@ export const transactionTypeSchema = z.enum([
 
 export const currencySchema = z.enum(['PYG', 'USD'])
 
+/** Diferencia pendiente de conciliacion: no es un movimiento y no afecta saldos. */
+export const reconciliationItemInputSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  detail: z.string().max(1000).nullable(),
+  status: z.enum(['open', 'resolved']),
+  kind: z.enum(['account', 'card', 'loan', 'receivable', 'commitment', 'other']),
+  referenceId: z.string().min(1).max(128).nullable(),
+  amountMinor: z.number().int().refine((value) => Math.abs(value) <= MAX_AMOUNT_MINOR).nullable(),
+  currency: currencySchema,
+  source: z.string().max(240).nullable(),
+})
+
+export type ReconciliationItemInput = z.infer<typeof reconciliationItemInputSchema>
+
 const optionalId = z.string().min(1).max(128).nullable()
 
 export const transactionInputSchema = z
@@ -116,6 +130,7 @@ export const accountInputSchema = z.object({
   type: z.enum(['cash', 'bank', 'wallet', 'savings', 'investment', 'other']),
   currency: currencySchema,
   initialBalanceMinor: z.number().int().min(-MAX_AMOUNT_MINOR).max(MAX_AMOUNT_MINOR),
+  balanceAsOf: z.date().nullable().optional(),
   includeInAvailable: z.boolean(),
   ownerId: optionalId,
   isActive: z.boolean(),

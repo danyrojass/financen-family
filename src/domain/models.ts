@@ -81,6 +81,12 @@ export interface Account {
   type: AccountType
   currency: CurrencyCode
   initialBalanceMinor: number
+  /**
+   * Instante de conciliacion del saldo. Si existe, `initialBalanceMinor` es el
+   * saldo real a esa fecha y los movimientos anteriores ya estan incluidos:
+   * no vuelven a sumarse. `null` = saldo inicial previo a todo movimiento.
+   */
+  balanceAsOf: Date | null
   /** Suma al "dinero disponible" del hogar. */
   includeInAvailable: boolean
   ownerId: string | null
@@ -262,4 +268,25 @@ export interface TransactionDraft {
 export interface MonthKey {
   year: number
   month: number
+}
+
+/** Item de la lista de pendientes de conciliacion (no es un movimiento). */
+export type ReconciliationStatus = 'open' | 'resolved'
+export type ReconciliationKind = 'account' | 'card' | 'loan' | 'receivable' | 'commitment' | 'other'
+
+export interface ReconciliationItem {
+  id: string
+  title: string
+  detail: string | null
+  status: ReconciliationStatus
+  kind: ReconciliationKind
+  /** Cuenta, tarjeta o prestamo relacionado, si aplica. */
+  referenceId: string | null
+  /** Diferencia o importe a conciliar. No afecta saldos. */
+  amountMinor: number | null
+  currency: CurrencyCode
+  source: string | null
+  createdAt: Date
+  updatedAt: Date
+  updatedBy: string
 }

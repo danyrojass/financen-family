@@ -1,8 +1,18 @@
 import { collection, deleteDoc, doc, orderBy, setDoc, Timestamp, updateDoc } from 'firebase/firestore'
+import type { AccountInput } from './schemas'
 import { getDb } from '@/lib/firebase'
 import { mapAccount } from './mappers'
 import { subscribeDocs } from './subscribe'
-import { accountInputSchema, type AccountInput } from './schemas'
+import { accountInputSchema } from './schemas'
+
+/** Convierte la fecha de conciliacion al Timestamp de Firestore (o null). */
+function serializedAccount(input: AccountInput) {
+  const { balanceAsOf, ...rest } = input
+  return {
+    ...rest,
+    balanceAsOf: balanceAsOf ? Timestamp.fromDate(balanceAsOf) : null,
+  }
+}
 
 export function subscribeAccounts(
   householdId: string,
@@ -27,7 +37,7 @@ export async function createAccount(
   const ref = doc(collection(getDb(), 'households', householdId, 'accounts'))
   const now = Timestamp.now()
   await setDoc(ref, {
-    ...parsed,
+    ...serializedAccount(parsed),
     notes: parsed.notes ?? null,
     ownerId: parsed.ownerId ?? null,
     sortOrder: parsed.sortOrder ?? Date.now(),
@@ -46,7 +56,7 @@ export async function updateAccount(
 ): Promise<void> {
   const parsed = accountInputSchema.parse(input)
   await updateDoc(doc(getDb(), 'households', householdId, 'accounts', accountId), {
-    ...parsed,
+    ...serializedAccount(parsed),
     notes: parsed.notes ?? null,
     ownerId: parsed.ownerId ?? null,
     updatedAt: Timestamp.now(),

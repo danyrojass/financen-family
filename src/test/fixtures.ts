@@ -12,6 +12,7 @@ export function makeAccount(overrides: Partial<Account> = {}): Account {
     type: 'bank',
     currency: 'PYG',
     initialBalanceMinor: 0,
+    balanceAsOf: null,
     includeInAvailable: true,
     ownerId: null,
     isActive: true,

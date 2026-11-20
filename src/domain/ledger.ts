@@ -117,11 +117,26 @@ function proportionalBaseMinor(transaction: Transaction, partMinor: number): num
   return Math.round((transaction.baseAmountMinor * partMinor) / transaction.amountMinor)
 }
 
-/** Movimientos que impactan cuentas (deltas en la moneda de cada cuenta). */
-export function computeAccountDeltas(transactions: Transaction[]): Map<string, number> {
+/**
+ * Movimientos que impactan cuentas (deltas en la moneda de cada cuenta).
+ *
+ * Si una cuenta tiene `balanceAsOf`, su `initialBalanceMinor` es el saldo real a
+ * ese instante: los movimientos anteriores o iguales ya estan incluidos en el
+ * ancla y no se vuelven a sumar.
+ */
+export function computeAccountDeltas(
+  transactions: Transaction[],
+  accounts: Account[] = [],
+): Map<string, number> {
   const deltas = new Map<string, number>()
-  const add = (accountId: string | null, amount: number) => {
+  const cutoffs = new Map<string, number>()
+  for (const account of accounts) {
+    if (account.balanceAsOf) cutoffs.set(account.id, account.balanceAsOf.getTime())
+  }
+  const add = (accountId: string | null, amount: number, at: Date) => {
     if (!accountId || !Number.isFinite(amount) || amount === 0) return
+    const cutoff = cutoffs.get(accountId)
+    if (cutoff !== undefined && at.getTime() <= cutoff) return
     deltas.set(accountId, (deltas.get(accountId) ?? 0) + Math.trunc(amount))
   }
 
@@ -131,30 +146,30 @@ export function computeAccountDeltas(transactions: Transaction[]): Map<string, n
 
     switch (tx.type) {
       case 'expense':
-        if (!tx.cardId) add(tx.accountId, -tx.amountMinor)
+        if (!tx.cardId) add(tx.accountId, -tx.amountMinor, tx.date)
         break
       case 'income':
         if (tx.cardId) {
           // Reintegro / devolucion a la tarjeta: reduce deuda.
           break
         }
-        add(tx.accountId, tx.amountMinor)
+        add(tx.accountId, tx.amountMinor, tx.date)
         break
       case 'transfer':
       case 'savings_contribution':
       case 'savings_withdrawal':
-        add(tx.accountId, -tx.amountMinor)
-        add(tx.toAccountId, destinationAmount)
+        add(tx.accountId, -tx.amountMinor, tx.date)
+        add(tx.toAccountId, destinationAmount, tx.date)
         break
       case 'withdrawal':
-        add(tx.toAccountId, destinationAmount)
+        add(tx.toAccountId, destinationAmount, tx.date)
         break
       case 'card_payment':
       case 'loan_payment':
-        add(tx.accountId, -tx.amountMinor)
+        add(tx.accountId, -tx.amountMinor, tx.date)
         break
       case 'adjustment':
-        if (!tx.cardId) add(tx.accountId, tx.amountMinor)
+        if (!tx.cardId) add(tx.accountId, tx.amountMinor, tx.date)
         break
       default:
         break
@@ -169,7 +184,7 @@ export function computeAccountBalances(
   transactions: Transaction[],
   ctx: LedgerContext,
 ): AccountBalance[] {
-  const deltas = computeAccountDeltas(transactions)
+  const deltas = computeAccountDeltas(transactions, accounts)
   return accounts.map((account) => {
     const deltaMinor = deltas.get(account.id) ?? 0
     const currentMinor = account.initialBalanceMinor + deltaMinor
@@ -268,8 +283,10 @@ export function cardStatementRange(card: Card, reference = new Date()): CardStat
     end = build(reference.getFullYear(), reference.getMonth() + 1, closingDay)
   }
   const start = addMonths(end, -1)
-  const afterEnd = addMonths(end, 1)
-  const dueDate = build(afterEnd.getFullYear(), afterEnd.getMonth(), dueDay)
+  // El vencimiento cae en el mes del cierre salvo que el dia de vencimiento ya
+  // haya pasado dentro de ese mes (ej. cierre 27, vencimiento 15 => mes siguiente).
+  const dueMonth = dueDay <= closingDay ? addMonths(end, 1) : end
+  const dueDate = build(dueMonth.getFullYear(), dueMonth.getMonth(), dueDay)
   return {
     start: new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 1),
     end: endOfDay(end),
@@ -541,6 +558,8 @@ export interface UpcomingItem {
   dueDate: Date
   overdue: boolean
   referenceId: string
+  /** Ingresos a cobrar: no son compromisos de pago. */
+  isIncome: boolean
 }
 
 export function computeUpcoming(
@@ -565,6 +584,7 @@ export function computeUpcoming(
       dueDate: due,
       overdue: due < startOfDay(now),
       referenceId: rule.id,
+      isIncome: rule.type === 'income',
     })
   }
 
@@ -579,6 +599,7 @@ export function computeUpcoming(
       dueDate: state.nextDueDate,
       overdue: state.isOverdue,
       referenceId: state.loan.id,
+      isIncome: false,
     })
   }
 
@@ -594,32 +615,90 @@ export function computeUpcoming(
       dueDate: statement.dueDate,
       overdue: statement.dueDate < startOfDay(now),
       referenceId: state.card.id,
+      isIncome: false,
     })
   }
 
   return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
 }
 
-export function availableMoneyBase(balances: AccountBalance[]): {
-  availableMinor: number
+export interface LiquidityBreakdown {
+  /** Bancos + efectivo + otras cuentas liquidas. */
+  bankMinor: number
+  cashMinor: number
+  walletMinor: number
+  otherLiquidMinor: number
+  /** Bancos + efectivo + billeteras + otras: liquidez de uso inmediato. */
+  liquidMinor: number
   savingsMinor: number
+  investmentMinor: number
+  /** Ahorros + inversiones: no disponible para gasto inmediato. */
+  nonLiquidMinor: number
   rateMissing: boolean
-} {
-  let availableMinor = 0
+}
+
+/**
+ * Separa la liquidez de uso inmediato (bancos, efectivo, billeteras) de los
+ * ahorros e inversiones. No mezcla patrimonio con liquidez.
+ */
+export function computeLiquidity(balances: AccountBalance[]): LiquidityBreakdown {
+  let bankMinor = 0
+  let cashMinor = 0
+  let walletMinor = 0
+  let otherLiquidMinor = 0
   let savingsMinor = 0
+  let investmentMinor = 0
   let rateMissing = false
 
   for (const balance of balances) {
     if (!balance.account.isActive) continue
     if (balance.rateMissing) rateMissing = true
-    if (balance.account.type === 'savings') {
-      savingsMinor += balance.currentBaseMinor
-    } else if (balance.account.includeInAvailable) {
-      availableMinor += balance.currentBaseMinor
+    const amount = balance.currentBaseMinor
+
+    switch (balance.account.type) {
+      case 'savings':
+        savingsMinor += amount
+        break
+      case 'investment':
+        investmentMinor += amount
+        break
+      default:
+        if (!balance.account.includeInAvailable) break
+        if (balance.account.type === 'cash') cashMinor += amount
+        else if (balance.account.type === 'wallet') walletMinor += amount
+        else if (balance.account.type === 'bank') bankMinor += amount
+        else otherLiquidMinor += amount
     }
   }
 
-  return { availableMinor, savingsMinor, rateMissing }
+  return {
+    bankMinor,
+    cashMinor,
+    walletMinor,
+    otherLiquidMinor,
+    liquidMinor: bankMinor + cashMinor + walletMinor + otherLiquidMinor,
+    savingsMinor,
+    investmentMinor,
+    nonLiquidMinor: savingsMinor + investmentMinor,
+    rateMissing,
+  }
+}
+
+/**
+ * Compatibilidad: liquidez total y ahorros historicos. `savingsMinor` ahora
+ * incluye inversiones, para que no queden fuera de todos los indicadores.
+ */
+export function availableMoneyBase(balances: AccountBalance[]): {
+  availableMinor: number
+  savingsMinor: number
+  rateMissing: boolean
+} {
+  const liquidity = computeLiquidity(balances)
+  return {
+    availableMinor: liquidity.liquidMinor,
+    savingsMinor: liquidity.nonLiquidMinor,
+    rateMissing: liquidity.rateMissing,
+  }
 }
 
 /** Proxima ocurrencia de una regla recurrente a partir de una fecha. */

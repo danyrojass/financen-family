@@ -10,6 +10,7 @@ import type {
   HouseholdMember,
   HouseholdRole,
   Loan,
+  ReconciliationItem,
   RecurringRule,
   Transaction,
 } from '@/domain/models'
@@ -21,6 +22,7 @@ import { subscribeCards } from '@/data/cards'
 import { subscribeCategories } from '@/data/categories'
 import { subscribeBudgets } from '@/data/budgets'
 import { subscribeLoans } from '@/data/loans'
+import { subscribeReconciliationItems } from '@/data/reconciliation'
 import { subscribeRecurring, generateDueRecurringDrafts } from '@/data/recurring'
 import { subscribeTransactionsInRange } from '@/data/transactions'
 import { removeHouseholdFromUser, setActiveHousehold } from '@/data/users'
@@ -40,6 +42,7 @@ interface HouseholdContextValue {
   loans: Loan[]
   recurring: RecurringRule[]
   transactions: Transaction[]
+  reconciliationItems: ReconciliationItem[]
   loading: boolean
   error: string | null
   ctx: LedgerContext
@@ -66,6 +69,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const [loans, setLoans] = React.useState<Loan[]>([])
   const [recurring, setRecurring] = React.useState<RecurringRule[]>([])
   const [transactions, setTransactions] = React.useState<Transaction[]>([])
+  const [reconciliationItems, setReconciliationItems] = React.useState<ReconciliationItem[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -102,6 +106,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       setLoans([])
       setRecurring([])
       setTransactions([])
+      setReconciliationItems([])
       setLoading(false)
       setError(null)
       return
@@ -147,6 +152,13 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     unsubscribers.push(subscribeLoans(householdId, setLoans, onSoftError('subscribeLoans')))
     unsubscribers.push(
       subscribeRecurring(householdId, setRecurring, onSoftError('subscribeRecurring')),
+    )
+    unsubscribers.push(
+      subscribeReconciliationItems(
+        householdId,
+        setReconciliationItems,
+        onSoftError('subscribeReconciliationItems'),
+      ),
     )
 
     const from = new Date(2000, 0, 1)
@@ -256,6 +268,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       loans,
       recurring,
       transactions,
+      reconciliationItems,
       loading,
       error,
       ctx,
@@ -275,6 +288,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       loans,
       recurring,
       transactions,
+      reconciliationItems,
       loading,
       error,
       ctx,

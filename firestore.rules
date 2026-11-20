@@ -282,7 +282,8 @@ service cloud.firestore {
         function validAccount() {
           let d = request.resource.data;
           return d.keys().hasOnly([
-              'name', 'type', 'currency', 'initialBalanceMinor', 'includeInAvailable',
+              'name', 'type', 'currency', 'initialBalanceMinor', 'balanceAsOf',
+              'includeInAvailable',
               'ownerId', 'isActive', 'notes', 'sortOrder', 'createdAt', 'updatedAt', 'updatedBy'
             ])
             && isId(accountId)
@@ -290,6 +291,7 @@ service cloud.firestore {
             && d.type in ['cash', 'bank', 'wallet', 'savings', 'investment', 'other']
             && isCurrency(d.currency)
             && isAmount(d.initialBalanceMinor)
+            && (d.balanceAsOf == null || d.balanceAsOf is timestamp)
             && d.includeInAvailable is bool
             && (d.ownerId == null || isId(d.ownerId))
             && d.isActive is bool
@@ -301,7 +303,8 @@ service cloud.firestore {
         allow create, update: if isMember(hid) && validAccount()
           && (request.method == 'create'
             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'name', 'type', 'currency', 'initialBalanceMinor', 'includeInAvailable',
+              'name', 'type', 'currency', 'initialBalanceMinor', 'balanceAsOf',
+              'includeInAvailable',
               'ownerId', 'isActive', 'notes', 'sortOrder', 'updatedAt', 'updatedBy'
             ]));
         allow delete: if isMember(hid);
@@ -588,6 +591,42 @@ service cloud.firestore {
           allow create: if isMember(hid) && validAudit();
           allow update, delete: if false;
         }
+      }
+
+      // -------------------------------------------------------------------
+      // reconciliationItems/{itemId}  (diferencias pendientes, no movimientos)
+      // -------------------------------------------------------------------
+      match /reconciliationItems/{itemId} {
+        function validReconciliationItem() {
+          let d = request.resource.data;
+          return d.keys().hasOnly([
+              'title', 'detail', 'status', 'kind', 'referenceId',
+              'amountMinor', 'currency', 'source', 'createdAt', 'updatedAt', 'updatedBy'
+            ])
+            && isId(itemId)
+            && isShortString(d.title, 160)
+            && isOptionalString(d.detail, 1000)
+            && d.status in ['open', 'resolved']
+            && d.kind in ['account', 'card', 'loan', 'receivable', 'commitment', 'other']
+            && (d.referenceId == null || isId(d.referenceId))
+            && (d.amountMinor == null || isAmount(d.amountMinor))
+            && isCurrency(d.currency)
+            && isOptionalString(d.source, 240)
+            && d.createdAt is timestamp
+            && d.updatedAt is timestamp
+            && d.updatedBy == uid();
+        }
+
+        allow read: if isMember(hid);
+        allow create: if isMember(hid) && validReconciliationItem();
+        // Solo se permite cambiar el estado de seguimiento (y su auditoria).
+        allow update: if isMember(hid)
+          && validReconciliationItem()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt', 'updatedBy'
+          ])
+          && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(hid);
       }
     }
 

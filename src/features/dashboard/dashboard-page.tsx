@@ -3,12 +3,15 @@ import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   ArrowUpRight,
+  Banknote,
   CalendarClock,
+  CheckCircle2,
   CreditCard,
   Landmark,
   Mic,
   PiggyBank,
   Plus,
+  ShieldAlert,
   Sparkles,
   TrendingDown,
   TrendingUp,
@@ -31,7 +34,7 @@ import type { TransactionDraft } from '@/domain/models'
 import type { CurrencyCode } from '@/domain/money'
 import { CURRENCY_CODES, convertMinor, formatMoney, formatPercent } from '@/domain/money'
 import {
-  availableMoneyBase,
+  computeLiquidity,
   computeAccountBalances,
   computeBudgetProgress,
   computeCardStates,
@@ -52,8 +55,11 @@ import {
   relativeDayLabel,
 } from '@/lib/date'
 import { cn } from '@/lib/utils'
+import { errorMessage } from '@/lib/errors'
+import { resolveReconciliationItem } from '@/data/reconciliation'
 import { useHousehold } from '@/providers/household-provider'
 import { useQuickAdd } from '@/providers/quick-add-provider'
+import { useToast } from '@/components/ui/toast'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { PageHeader } from '@/components/ui/page-header'
@@ -82,6 +88,7 @@ function chartMoney(value: number, currency: CurrencyCode): string {
 
 export function DashboardPage() {
   const {
+    householdId,
     household,
     members,
     accounts,
@@ -91,10 +98,13 @@ export function DashboardPage() {
     loans,
     recurring,
     transactions,
+    reconciliationItems,
     ctx,
+    actor,
     memberName,
   } = useHousehold()
   const { openQuickAdd } = useQuickAdd()
+  const { toast } = useToast()
 
   const [month, setMonth] = React.useState(() => monthKeyOf(new Date()))
   const [memberId, setMemberId] = React.useState('')
@@ -123,7 +133,20 @@ export function DashboardPage() {
     () => computeAccountBalances(accounts, transactions, ctx),
     [accounts, ctx, transactions],
   )
-  const available = React.useMemo(() => availableMoneyBase(balances), [balances])
+  const liquidity = React.useMemo(() => computeLiquidity(balances), [balances])
+  const receivablesMinor = React.useMemo(
+    () =>
+      transactions
+        .filter(
+          (tx) =>
+            isActiveTransaction(tx) &&
+            tx.status === 'pending' &&
+            tx.type === 'income' &&
+            !tx.cardId,
+        )
+        .reduce((total, tx) => total + tx.baseAmountMinor, 0),
+    [transactions],
+  )
   const cardStates = React.useMemo(() => computeCardStates(cards, transactions), [cards, transactions])
   const cardDebt = React.useMemo(() => computeTotalCardDebtBase(cardStates, ctx), [cardStates, ctx])
   const loanStates = React.useMemo(
@@ -186,6 +209,62 @@ export function DashboardPage() {
     () => computeUpcoming(recurring, loanStates, cardStates),
     [cardStates, loanStates, recurring],
   )
+
+  const toBase = React.useCallback(
+    (amountMinor: number, currency: CurrencyCode) =>
+      currency === ctx.baseCurrency
+        ? amountMinor
+        : convertMinor(amountMinor, currency, ctx.baseCurrency, ctx.fxRates, ctx.baseCurrency) ?? 0,
+    [ctx],
+  )
+
+  // Compromisos = cuotas y egresos recurrentes con vencimiento.
+  // Se excluyen ingresos a cobrar y deuda ya devengada de tarjetas.
+  const commitmentsMinor = React.useMemo(
+    () =>
+      upcoming
+        .filter((item) => item.kind !== 'card' && !item.isIncome)
+        .reduce((sum, item) => sum + toBase(item.amountMinor, item.currency), 0),
+    [toBase, upcoming],
+  )
+
+  // Pagos extraordinarios = egresos pendientes fechados en el futuro (ej. refuerzo de vehiculo).
+  const extraordinaryPayments = React.useMemo(
+    () =>
+      transactions
+        .filter(
+          (tx) =>
+            isActiveTransaction(tx) &&
+            tx.status === 'pending' &&
+            tx.type === 'expense' &&
+            tx.date.getTime() > Date.now(),
+        )
+        .sort((a, b) => a.date.getTime() - b.date.getTime()),
+    [transactions],
+  )
+  const extraordinaryMinor = React.useMemo(
+    () => extraordinaryPayments.reduce((sum, tx) => sum + tx.baseAmountMinor, 0),
+    [extraordinaryPayments],
+  )
+
+  const openReconciliationItems = React.useMemo(
+    () => reconciliationItems.filter((item) => item.status === 'open'),
+    [reconciliationItems],
+  )
+
+  const [resolvingId, setResolvingId] = React.useState<string | null>(null)
+  const markResolved = async (itemId: string) => {
+    if (!householdId || !actor) return
+    setResolvingId(itemId)
+    try {
+      await resolveReconciliationItem(householdId, itemId, actor.uid)
+      toast({ title: 'Diferencia marcada como resuelta', variant: 'success' })
+    } catch (resolveError) {
+      toast({ title: 'No se pudo actualizar', description: errorMessage(resolveError), variant: 'error' })
+    } finally {
+      setResolvingId(null)
+    }
+  }
 
   const recent = React.useMemo(
     () =>
@@ -338,11 +417,46 @@ export function DashboardPage() {
           hint="Ingresos menos gastos"
         />
         <StatCard
-          label="Dinero disponible"
-          value={formatMoney(available.availableMinor, ctx.baseCurrency)}
-          icon={<PiggyBank />}
+          label="Pagos de deuda"
+          value={formatMoney(summary.debtPaymentsMinor, ctx.baseCurrency)}
+          icon={<CreditCard />}
+          tone="muted"
+          hint="No cuentan como gasto"
+        />
+        <StatCard
+          label="Liquidez bancos + efectivo"
+          value={formatMoney(liquidity.bankMinor + liquidity.cashMinor, ctx.baseCurrency)}
+          icon={<Landmark />}
           tone="default"
-          hint={available.rateMissing ? 'Falta una cotización' : 'Cuentas incluidas'}
+          hint={liquidity.rateMissing ? 'Falta una cotización' : 'Uso inmediato'}
+        />
+        <StatCard
+          label="Billeteras digitales"
+          value={formatMoney(liquidity.walletMinor, ctx.baseCurrency)}
+          icon={<Wallet />}
+          tone="default"
+          hint="Takenos y Ontop"
+        />
+        <StatCard
+          label="Liquidez total"
+          value={formatMoney(liquidity.liquidMinor, ctx.baseCurrency)}
+          icon={<Banknote />}
+          tone="positive"
+          hint="Bancos + efectivo + billeteras"
+        />
+        <StatCard
+          label="Ahorros e inversiones"
+          value={formatMoney(liquidity.nonLiquidMinor, ctx.baseCurrency)}
+          icon={<PiggyBank />}
+          tone="positive"
+          hint="No disponible para gasto"
+        />
+        <StatCard
+          label="Dinero por cobrar"
+          value={formatMoney(receivablesMinor, ctx.baseCurrency)}
+          icon={<TrendingUp />}
+          tone={receivablesMinor > 0 ? 'warning' : 'muted'}
+          hint="No forma parte de la liquidez"
         />
         <StatCard
           label="Deuda de tarjetas"
@@ -359,18 +473,18 @@ export function DashboardPage() {
           hint="Capital pendiente"
         />
         <StatCard
-          label="Ahorros"
-          value={formatMoney(available.savingsMinor, ctx.baseCurrency)}
-          icon={<PiggyBank />}
-          tone="positive"
-          hint="Cuentas de ahorro"
+          label="Compromisos"
+          value={formatMoney(commitmentsMinor, ctx.baseCurrency)}
+          icon={<CalendarClock />}
+          tone="muted"
+          hint="Cuotas y recurrentes (60 días)"
         />
         <StatCard
-          label="Pagos de deuda"
-          value={formatMoney(summary.debtPaymentsMinor, ctx.baseCurrency)}
-          icon={<CreditCard />}
-          tone="muted"
-          hint="No cuentan como gasto"
+          label="Pago extraordinario"
+          value={formatMoney(extraordinaryMinor, ctx.baseCurrency)}
+          icon={<Banknote />}
+          tone={extraordinaryMinor > 0 ? 'warning' : 'muted'}
+          hint="Fuera del gasto mensual"
         />
       </div>
 
@@ -590,6 +704,92 @@ export function DashboardPage() {
                       </p>
                       {item.overdue ? <Badge variant="destructive">Vencido</Badge> : null}
                     </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Diferencias pendientes de conciliación</CardTitle>
+            <CardDescription>
+              No son movimientos: no afectan saldos ni se contabilizan como gasto o ingreso.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {openReconciliationItems.length === 0 ? (
+              <EmptyState
+                icon={<CheckCircle2 />}
+                title="Todo conciliado"
+                description="No hay diferencias pendientes de revisión."
+              />
+            ) : (
+              <ul className="divide-y divide-border">
+                {openReconciliationItems.map((item) => (
+                  <li key={item.id} className="flex items-start gap-3 py-2.5">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
+                      <ShieldAlert className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{item.title}</p>
+                      {item.detail ? (
+                        <p className="text-xs text-muted-foreground">{item.detail}</p>
+                      ) : null}
+                      {item.amountMinor != null ? (
+                        <p className="text-xs font-semibold tabular-nums">
+                          {formatMoney(item.amountMinor, item.currency, { explicitSign: true })}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={resolvingId === item.id || !actor}
+                      onClick={() => void markResolved(item.id)}
+                    >
+                      <CheckCircle2 />
+                      Resolver
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pagos extraordinarios próximos</CardTitle>
+            <CardDescription>Compromisos fuera del presupuesto mensual.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {extraordinaryPayments.length === 0 ? (
+              <EmptyState
+                icon={<Banknote />}
+                title="Sin pagos extraordinarios"
+                description="No hay egresos pendientes fechados en el futuro."
+              />
+            ) : (
+              <ul className="divide-y divide-border">
+                {extraordinaryPayments.map((tx) => (
+                  <li key={tx.id} className="flex items-center gap-3 py-2.5">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
+                      <Banknote className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{tx.description}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Pendiente · {formatDate(tx.date)}
+                      </p>
+                    </div>
+                    <p className="shrink-0 text-sm font-semibold tabular-nums">
+                      {formatMoney(tx.baseAmountMinor, ctx.baseCurrency, { compact: true })}
+                    </p>
                   </li>
                 ))}
               </ul>

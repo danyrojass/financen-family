@@ -16,6 +16,9 @@ import type {
   LoanKind,
   RecurrenceFrequency,
   RecurringRule,
+  ReconciliationItem,
+  ReconciliationKind,
+  ReconciliationStatus,
   Transaction,
   TransactionAudit,
   TransactionStatus,
@@ -159,11 +162,30 @@ export function mapAccount(id: string, data: DocumentData): Account {
     type,
     currency: currency(data.currency),
     initialBalanceMinor: num(data.initialBalanceMinor),
+    balanceAsOf: toDate(data.balanceAsOf),
     includeInAvailable: data.includeInAvailable !== false,
     ownerId: strOrNull(data.ownerId),
     isActive: data.isActive !== false,
     notes: strOrNull(data.notes),
     sortOrder: num(data.sortOrder),
+    createdAt: toDateOr(data.createdAt),
+    updatedAt: toDateOr(data.updatedAt),
+    updatedBy: str(data.updatedBy),
+  }
+}
+
+export function mapReconciliationItem(id: string, data: DocumentData): ReconciliationItem {
+  const kinds: ReconciliationKind[] = ['account', 'card', 'loan', 'receivable', 'commitment', 'other']
+  return {
+    id,
+    title: str(data.title) || 'Diferencia pendiente',
+    detail: strOrNull(data.detail),
+    status: (data.status === 'resolved' ? 'resolved' : 'open') as ReconciliationStatus,
+    kind: kinds.includes(data.kind as ReconciliationKind) ? (data.kind as ReconciliationKind) : 'other',
+    referenceId: strOrNull(data.referenceId),
+    amountMinor: numOrNull(data.amountMinor),
+    currency: currency(data.currency),
+    source: strOrNull(data.source),
     createdAt: toDateOr(data.createdAt),
     updatedAt: toDateOr(data.updatedAt),
     updatedBy: str(data.updatedBy),
