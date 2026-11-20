@@ -18,7 +18,12 @@
     "icons": "node scripts/generate-icons.mjs",
     "emulators": "firebase emulators:start",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
-    "deploy:hosting": "firebase deploy --only hosting"
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:rules:prod": "firebase --project default deploy --only firestore:rules,firestore:indexes",
+    "deploy:hosting:prod": "firebase --project default deploy --only hosting",
+    "deploy:rules:staging": "firebase --project staging deploy --only firestore:rules,firestore:indexes",
+    "deploy:hosting:staging": "firebase --project staging deploy --only hosting",
+    "deploy:functions:staging": "firebase --project staging deploy --only functions"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",

@@ -475,6 +475,7 @@ ESLint 9 con flat config, `typescript-eslint`, reglas de React Hooks y React Ref
 ## Documentación adicional
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): arquitectura, modelo de datos, seguridad, decisiones y operación.
+- [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md): ramas, ambientes (producción/staging) y comandos de deploy.
 - [`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md): guía de consola paso a paso.
 - [`firestore.rules`](firestore.rules): reglas de seguridad.
 - [`firestore.indexes.json`](firestore.indexes.json): índices compuestos.

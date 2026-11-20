@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "financen-family",
+    "staging": "<staging-project-id>"
+  }
+}
