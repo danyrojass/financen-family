@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   CheckCircle2,
   FilterX,
@@ -71,14 +72,25 @@ export function TransactionsPage() {
   } = useHousehold()
   const { openQuickAdd } = useQuickAdd()
   const { toast } = useToast()
+  const [searchParams] = useSearchParams()
+
+  const initialStatus: StatusFilter =
+    searchParams.get('status') === 'pending'
+      ? 'pending'
+      : searchParams.get('status') === 'confirmed'
+        ? 'confirmed'
+        : 'all'
+  const initialPeriodAll =
+    searchParams.get('period') === 'all' || searchParams.get('status') === 'pending'
 
   const [month, setMonth] = React.useState(() => monthKeyOf(new Date()))
+  const [periodAll, setPeriodAll] = React.useState(initialPeriodAll)
   const [search, setSearch] = React.useState('')
   const [type, setType] = React.useState('')
   const [accountId, setAccountId] = React.useState('')
   const [categoryId, setCategoryId] = React.useState('')
   const [memberId, setMemberId] = React.useState('')
-  const [status, setStatus] = React.useState<StatusFilter>('all')
+  const [status, setStatus] = React.useState<StatusFilter>(initialStatus)
   const [includeDeleted, setIncludeDeleted] = React.useState(false)
   const [voiceOpen, setVoiceOpen] = React.useState(false)
   const [selected, setSelected] = React.useState<Transaction | null>(null)
@@ -87,7 +99,16 @@ export function TransactionsPage() {
   const [auditLoading, setAuditLoading] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
-  const range = React.useMemo(() => monthRange(month), [month])
+  const monthRangeValue = React.useMemo(() => monthRange(month), [month])
+  const range = React.useMemo(() => {
+    if (!periodAll) return monthRangeValue
+    const dates = transactions.map((tx) => tx.date.getTime())
+    if (dates.length === 0) return monthRangeValue
+    return {
+      from: new Date(Math.min(...dates)),
+      to: new Date(Math.max(...dates, monthRangeValue.to.getTime())),
+    }
+  }, [monthRangeValue, periodAll, transactions])
 
   const categoryById = React.useMemo(
     () => new Map(categories.map((category) => [category.id, category])),
@@ -264,12 +285,14 @@ export function TransactionsPage() {
     setMemberId('')
     setStatus('all')
     setIncludeDeleted(false)
+    setPeriodAll(false)
   }
 
   const hasFilters =
     Boolean(search || type || accountId || categoryId || memberId) ||
     status !== 'all' ||
-    includeDeleted
+    includeDeleted ||
+    periodAll
 
   return (
     <div className="space-y-4">
@@ -290,7 +313,16 @@ export function TransactionsPage() {
       <Card>
         <CardContent className="space-y-3 p-3 sm:p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <MonthNav value={month} onChange={setMonth} />
+            {periodAll ? (
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">Todos los meses</Badge>
+                <Button variant="ghost" size="sm" onClick={() => setPeriodAll(false)}>
+                  Ver por mes
+                </Button>
+              </div>
+            ) : (
+              <MonthNav value={month} onChange={setMonth} />
+            )}
             <div className="grid grid-cols-3 gap-2 text-center sm:flex sm:gap-4">
               <div>
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Ingresos</p>
@@ -402,10 +434,12 @@ export function TransactionsPage() {
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>
-          {filtered.length} movimiento(s) · {monthLabel(month)}
+          {filtered.length} movimiento(s) · {periodAll ? 'Todos los meses' : monthLabel(month)}
         </span>
         {summary.pendingCount > 0 ? (
-          <Badge variant="warning">{summary.pendingCount} pendiente(s)</Badge>
+          <Badge variant="warning">
+            {summary.pendingCount} pendiente(s){periodAll ? '' : ' en este mes'}
+          </Badge>
         ) : null}
       </div>
 

@@ -129,6 +129,15 @@ export function DashboardPage() {
     () => computeMonthSummary(filteredTransactions),
     [filteredTransactions],
   )
+  const pendingGlobal = React.useMemo(() => {
+    const pending = transactions.filter(
+      (tx) => isActiveTransaction(tx) && tx.status === 'pending',
+    )
+    return {
+      count: pending.length,
+      amountMinor: pending.reduce((sum, tx) => sum + Math.abs(tx.baseAmountMinor), 0),
+    }
+  }, [transactions])
   const balances = React.useMemo(
     () => computeAccountBalances(accounts, transactions, ctx),
     [accounts, ctx, transactions],
@@ -379,17 +388,20 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
-      {summary.pendingCount > 0 ? (
+      {pendingGlobal.count > 0 ? (
         <Alert
           variant="warning"
-          title={`${summary.pendingCount} movimiento(s) pendiente(s)`}
+          title={`${pendingGlobal.count} movimiento(s) pendiente(s)`}
           action={
-            <Link to="/app/movimientos" className="text-xs font-medium text-primary underline">
-              Revisar
+            <Link
+              to="/app/movimientos?status=pending&period=all"
+              className="text-xs font-medium text-primary underline"
+            >
+              Revisar pendientes
             </Link>
           }
         >
-          Hay borradores por {formatMoney(summary.pendingAmountMinor, ctx.baseCurrency)} que todavía no
+          Hay borradores por {formatMoney(pendingGlobal.amountMinor, ctx.baseCurrency)} que todavía no
           afectan los saldos. Confirmalos o editalos desde Movimientos.
         </Alert>
       ) : null}
