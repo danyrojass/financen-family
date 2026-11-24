@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, CheckCircle2, LogIn, Mail, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { useAuth } from '@/providers/auth-provider'
-import { acceptInvitation, getInvitation } from '@/data/households'
+import { acceptInvitation, getInvitation, getHousehold } from '@/data/households'
 import type { Invitation } from '@/domain/models'
 import { formatDate } from '@/lib/date'
 import { errorMessage } from '@/lib/errors'
@@ -27,10 +27,11 @@ export function JoinPage() {
   React.useEffect(() => {
     if (!user || !householdId || !invitationId) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    void getInvitation(householdId, invitationId)
-      .then((result) => {
+    const load = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const result = await getInvitation(householdId, invitationId)
         if (cancelled) return
         if (!result) {
           setError(
@@ -39,17 +40,43 @@ export function JoinPage() {
         } else {
           setInvitation(result)
         }
-      })
-      .catch((loadError: unknown) => {
-        if (!cancelled) setError(errorMessage(loadError))
-      })
-      .finally(() => {
+      } catch (loadError: unknown) {
+        if (cancelled) return
+        // Las invitaciones aceptadas/revocadas ya no son legibles por reglas.
+        // Si quien abre el enlace ya es miembro (o el perfil ya incluye el hogar),
+        // mostramos el enlace como ya utilizado en vez de un error de permisos.
+        try {
+          const household = await getHousehold(householdId)
+          if (!cancelled && (household || profile?.householdIds.includes(householdId))) {
+            setInvitation({
+              id: invitationId,
+              email: user.email?.toLowerCase() ?? '',
+              role: 'MEMBER',
+              status: 'accepted',
+              createdBy: '',
+              createdAt: new Date(0),
+              expiresAt: new Date(0),
+              householdName: household?.name ?? 'tu hogar',
+              acceptedBy: user.uid,
+              acceptedAt: new Date(),
+              revokedAt: null,
+            })
+            setError(null)
+            return
+          }
+        } catch {
+          // Ignorar: caemos al error original.
+        }
+        setError(errorMessage(loadError))
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }
-  }, [householdId, invitationId, user])
+  }, [householdId, invitationId, user, profile?.householdIds])
 
   const handleSignIn = async () => {
     setSigningIn(true)

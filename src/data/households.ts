@@ -82,6 +82,11 @@ export async function createHousehold({ user, name, baseCurrency, fxRates }: Cre
   return householdId
 }
 
+export async function getHousehold(householdId: string): Promise<Household | null> {
+  const snapshot = await getDocFromServer(doc(getDb(), 'households', householdId))
+  return snapshot.exists() ? mapHousehold(snapshot.id, snapshot.data()) : null
+}
+
 export function subscribeHousehold(
   householdId: string,
   onData: (household: Household | null) => void,
