@@ -71,7 +71,8 @@ export function VoiceDialog({
           </Button>
           <Button type="button" disabled={!draft} onClick={() => draft && onConfirm(draft)}>
             <Sparkles />
-            Revisar y confirmar
+            <span className="hidden sm:inline">Revisar y confirmar</span>
+            <span className="sm:hidden">Confirmar</span>
           </Button>
         </>
       }
